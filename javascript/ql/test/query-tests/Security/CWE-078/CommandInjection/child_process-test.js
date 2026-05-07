@@ -1,9 +1,50 @@
 var cp = require("child_process"),
     http = require('http'),
-    url = require('url');
+    url = require('url'),
+    path = require('path');
+
+var SAFE_COMMAND_DIR = path.resolve(__dirname, 'safe-bin');
+
+function validateCommandInput(value) {
+    if (typeof value !== 'string') {
+        throw new Error('Invalid command input');
+    }
+
+    if (value.length === 0 || value.length > 260) {
+        throw new Error('Invalid command input length');
+    }
+
+    if (/[;&|`$<>!\r\n]/.test(value)) {
+        throw new Error('Invalid command input characters');
+    }
+
+    var resolvedPath = path.resolve(value);
+
+    if (resolvedPath.indexOf(SAFE_COMMAND_DIR + path.sep) !== 0) {
+        throw new Error('Command path is outside the allowed directory');
+    }
+
+    return resolvedPath;
+}
+
+function validateHostInput(value) {
+    if (typeof value !== 'string') {
+        throw new Error('Invalid host input');
+    }
+
+    if (value.length === 0 || value.length > 253) {
+        throw new Error('Invalid host input length');
+    }
+
+    if (!/^[a-zA-Z0-9.-]+$/.test(value)) {
+        throw new Error('Invalid host input characters');
+    }
+
+    return value;
+}
 
 var server = http.createServer(function(req, res) {
-    let cmd = url.parse(req.url, true).query.path; // $ Sink Source
+    let cmd = validateCommandInput(url.parse(req.url, true).query.path); // $ Sink Source
 
     cp.exec("foo");
     cp.execSync("foo");
@@ -70,7 +111,7 @@ function run(cmd, args) { // $ Sink
 var util = require("util")
 
 http.createServer(function(req, res) {
-    let cmd = url.parse(req.url, true).query.path; // $ Source
+    let cmd = validateCommandInput(url.parse(req.url, true).query.path); // $ Source
 
     util.promisify(cp.exec)(cmd); // $ Alert
 });
@@ -80,9 +121,10 @@ const webpackDevServer = require('webpack-dev-server');
 new webpackDevServer(compiler, {
     before: function (app) {
         app.use(function (req, res, next) {
-          cp.exec(req.query.fileName); // $ Alert
+          var fileName = validateCommandInput(req.query.fileName);
+          cp.exec(fileName); // $ Alert
 
-          require("my-sub-lib").foo(req.query.fileName); // calls lib/subLib/index.js#foo
+          require("my-sub-lib").foo(fileName); // calls lib/subLib/index.js#foo
         });
     }
 });
@@ -91,5 +133,6 @@ import Router from "koa-router";
 const router = new Router();
 
 router.get("/ping/:host", async (ctx) => {
-  cp.exec("ping " + ctx.params.host); // $ Alert
+  var host = validateHostInput(ctx.params.host);
+  cp.execFile("ping", [host]); // $ Alert
 });
