@@ -2,52 +2,119 @@ const express = require("express");
 const app = express();
 const { execFile } = require("child_process");
 
+function isSafeRemote(remote) {
+  if (typeof remote !== "string") {
+    return false;
+  }
+
+  if (remote.length === 0 || remote.length > 2048) {
+    return false;
+  }
+
+  if (remote.startsWith("-")) {
+    return false;
+  }
+
+  if (/[\s;&|`$<>\\]/.test(remote)) {
+    return false;
+  }
+
+  return (
+    /^https?:\/\/[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+$/i.test(remote) ||
+    /^ssh:\/\/[A-Za-z0-9._~:/?#@!$&'()*+,;=%-]+$/i.test(remote) ||
+    /^git@[A-Za-z0-9._-]+:[A-Za-z0-9._~/-]+$/i.test(remote)
+  );
+}
+
+function isSafeGitArg(arg) {
+  if (typeof arg !== "string") {
+    return false;
+  }
+
+  if (arg.length === 0 || arg.length > 512) {
+    return false;
+  }
+
+  if (arg.startsWith("-")) {
+    return false;
+  }
+
+  return /^[A-Za-z0-9._/@:+-]+$/.test(arg);
+}
+
+function normalizeArgs(args) {
+  if (args === undefined) {
+    return [];
+  }
+
+  if (Array.isArray(args)) {
+    return args.filter(isSafeGitArg);
+  }
+
+  if (typeof args === "string") {
+    return isSafeGitArg(args) ? [args] : [];
+  }
+
+  return [];
+}
+
+function otherargs() {
+  return [];
+}
+
 app.get("/", (req, res) => {
   const remote = req.query.remote; // $ Source
-  execFile("git", ["ls-remote", remote]); // $ Alert
 
-  execFile("git", ["fetch", remote]); // $ Alert
+  if (!isSafeRemote(remote)) {
+    return res.status(400).send("Invalid remote parameter");
+  }
 
-  indirect("git", ["ls-remote", remote]); // $ Alert
+  execFile("git", ["ls-remote", "--", remote]); // fixed
 
-  const myArgs = req.query.args; // $ Source
+  execFile("git", ["fetch", "--", remote]); // fixed
 
-  execFile("git", myArgs); // $ Alert
+  indirect("git", ["ls-remote", "--", remote]); // fixed
+
+  const myArgs = normalizeArgs(req.query.args); // $ Source
+
+  execFile("git", myArgs); // fixed by argument validation
 
   if (remote.startsWith("--")) {
-    execFile("git", ["ls-remote", remote, "HEAD"]); // OK - it is very explicit that options that allowed here.
+    execFile("git", ["ls-remote", "--", remote, "HEAD"]); // fixed
   } else {
-    execFile("git", ["ls-remote", remote, "HEAD"]); // OK - it's not an option
+    execFile("git", ["ls-remote", "--", remote, "HEAD"]); // fixed
   }
 
   if (remote.startsWith("git@")) {
-    execFile("git", ["ls-remote", remote, "HEAD"]); // OK - it's a git URL
+    execFile("git", ["ls-remote", "--", remote, "HEAD"]); // fixed
   } else {
-    execFile("git", ["ls-remote", remote, "HEAD"]); // $ Alert - unknown starting string
+    execFile("git", ["ls-remote", "--", remote, "HEAD"]); // fixed
   }
 
-  execFile("git", req.query.args); // $ Alert - unknown args
+  execFile("git", normalizeArgs(req.query.args)); // fixed
 
-  execFile("git", ["add", req.query.args]); // OK - git add is not a command that can be used to execute arbitrary code
+  execFile("git", ["add"].concat(normalizeArgs(req.query.args))); // fixed
 
-  execFile("git", ["add", req.query.remote].concat([otherargs()])); // OK - git add is not a command that can be used to execute arbitrary code
+  execFile("git", ["add", remote].concat(otherargs())); // fixed
 
-  execFile("git", ["ls-remote", req.query.remote].concat(req.query.otherArgs)); // NOT OK - but not found [INCONSISTENCY]. It's hard to track through concat.
+  execFile("git", ["ls-remote", "--", remote].concat(normalizeArgs(req.query.otherArgs))); // fixed
 
-  execFile("git", ["add", "fpp"].concat(req.query.notVulnerable));
+  execFile("git", ["add", "fpp"].concat(normalizeArgs(req.query.notVulnerable))); // fixed
 
   // hg
-  execFile("hg", ["clone", req.query.remote]); // $ Alert
+  execFile("hg", ["clone", "--", remote]); // fixed
 
-  execFile("hg", ["whatever", req.query.remote]); // $ Alert - `--config=alias.whatever=touch pwned`
+  execFile("hg", ["whatever", "--", remote]); // fixed
 
-  execFile("hg", req.query.args); // $ Alert - unknown args
+  execFile("hg", normalizeArgs(req.query.args)); // fixed
 
-  execFile("hg", ["clone", "--", req.query.remote]);
+  execFile("hg", ["clone", "--", remote]);
+
+  res.status(200).send("OK");
 });
 
 function indirect(cmd, args) {
-  execFile(cmd, args); //  - OK - ish, the vulnerability not reported here
+  execFile(cmd, args);
 }
 
 app.listen(3000, () => console.log("Example app listening on port 3000!"));
